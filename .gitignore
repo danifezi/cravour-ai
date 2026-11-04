@@ -1,0 +1,11 @@
+# This repository is a source patch. Do not add local secrets.
+.env
+.env.*
+*.pem
+*.key
+credentials.json
+service-account*.json
+node_modules/
+dist/
+.vercel/
+.firebase/

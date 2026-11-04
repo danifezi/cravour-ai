@@ -1,0 +1,1247 @@
+diff --git a/functions/src/__tests__/whatsappAssetLink.test.ts b/functions/src/__tests__/whatsappAssetLink.test.ts
+new file mode 100644
+index 0000000000..9d82499496
+--- /dev/null
++++ b/functions/src/__tests__/whatsappAssetLink.test.ts
+@@ -0,0 +1,23 @@
++import { describe, expect, test } from "@jest/globals";
++import { extractSharedAssetId } from "../services/whatsappCreativeIntent.js";
++
++describe("extractSharedAssetId", () => {
++  test("pulls the asset id out of an Ad Maker deep link", () => {
++    expect(extractSharedAssetId("Open my file https://cravour.com/ads?asset=asset_abc123XYZ please")).toBe(
++      "asset_abc123XYZ"
++    );
++  });
++
++  test("handles reel links with extra query params", () => {
++    expect(extractSharedAssetId("https://cravour.com/reel?foo=1&asset=asset_k9Qw2x7")).toBe("asset_k9Qw2x7");
++  });
++
++  test("falls back to a bare asset id", () => {
++    expect(extractSharedAssetId("post it asset_7h21ab please")).toBe("asset_7h21ab");
++  });
++
++  test("returns null when there is no asset reference", () => {
++    expect(extractSharedAssetId("make me a flyer for my shawarma spot")).toBeNull();
++    expect(extractSharedAssetId("")).toBeNull();
++  });
++});
+diff --git a/functions/src/config/costGuard.ts b/functions/src/config/costGuard.ts
+index 73a2e9fdf7..ec8dba3195 100644
+--- a/functions/src/config/costGuard.ts
++++ b/functions/src/config/costGuard.ts
+@@ -137,7 +137,7 @@ export function allowSystemLlmSpend(
+   if (mode === "byok_only") return false;
+   if (mode === "open") return true;
+   // minimal — Grok-credited platform keys allowed for Ad Maker + core text.
+-  // Image/video/ad-copy handlers cascade themselves (Grok Imagine first).
++  // Image/video/ad-copy handlers cascade themselves (Muse → Grok → Gemini → OpenAI → ElevenLabs).
+   return true;
+ }
+ 
+diff --git a/functions/src/config/savvyVoicePrompt.ts b/functions/src/config/savvyVoicePrompt.ts
+index 3eabe3bc4b..885c0637da 100644
+--- a/functions/src/config/savvyVoicePrompt.ts
++++ b/functions/src/config/savvyVoicePrompt.ts
+@@ -14,9 +14,9 @@ You are Savvy, Cravour's creative and payment co-pilot for Nigerian small busine
+ 
+ # Creative Engines & Pareto 80/20 High-Impact Focus
+ - Apply the 80/20 Pareto rule: 80% of merchant revenue and buyer savings come from 20% of actions — (1) a clear WhatsApp broadcast + 1K poster in the customer's dialect, (2) comparing staple prices against the monthly budget, and (3) confirming merchant orders with milestone delivery escrow before dispatch.
+-- Posters: Grok Imagine (grok-imagine-image-2.0) first. Gemini image is the backup. ElevenLabs does not create images.
+-- Copy: Grok 4.6 first, then Gemini 3.8 Flash. Drafts only. Never invent a price.
+-- Voice and jingles: ElevenLabs. Video: Grok Imagine video, with a still from the poster when one exists.
++- Posters and images: automatic fallback chain across Meta Muse, Grok, Gemini, OpenAI, then ElevenLabs Flows. Never promise one fixed model; say the poster engine picks the best available.
++- Copy: automatic fallback chain across DeepSeek, Gemini, OpenAI, Meta Muse, and Grok. Drafts only. Never invent a price.
++- Voice and jingles: ElevenLabs (TTS + Music). Short video clips: Meta Muse, then Google Veo, then Grok, then ElevenLabs video — with a still from the poster while a clip renders.
+ - Social hooks, stories, and radio spots are copy drafts. Do not say they are already posted.
+ - Always end campaign or budget advice with a concrete 1-tap next step (e.g., open Ad Maker Studio, preview in Pidgin/Yorùbá/Igbo/Hausa, or review budget in Wallet).
+ 
+@@ -57,6 +57,9 @@ When a navigation tool is unavailable (e.g. on WhatsApp), provide the exact clea
+ - Pass the caller's phone through caller_id so WhatsApp can deliver the file. After a create tool, say the asset is saved in Ad Maker. If mediaSent is true, the file is already in the chat.
+ - findNearbySellers returns the three nearest verified sellers and their ads. Read those names back. Do not invent a shop.
+ - shareToReels posts an Ad Maker assetId to Reels. Do not put an email or a private prompt on a reel.
++- Account linking: a WhatsApp sender becomes their logged-in self by sending "link CODE" (the code comes from Ad Maker → WhatsApp, valid 15 minutes). Linked senders generate with their own plan limits and their files appear in their Ad Maker history. Never ask for a password or login on WhatsApp; the link CODE is the login.
++- Shared Ad Maker links: a pasted https://cravour.com/ads?asset=<id> link opens that exact file. "post it" shares it to Reels. Say the asset link back so the sender can open it.
++- Voice notes: inbound voice is transcribed with ElevenLabs Scribe, so answer the transcribed request normally. When the sender used a voice note, a short spoken summary follows the text reply — keep the first two sentences self-contained.
+ 
+ # Actions & Tool Mapping
+ - Image/Poster request on WhatsApp → createImage. On the web, generateImage may also open Ad Maker. Show the picture only when the tool returns it.
+@@ -91,5 +94,5 @@ export const SAVVY_TEXT_PROMPT = SAVVY_VOICE_PROMPT.replace(
+   "Use concise text replies, usually 2–5 sentences; use a short list for steps or a longer draft when requested.",
+ );
+ 
+-export const SAVVY_VOICE_SHORT_PROMPT = `You are Savvy, Cravour's lifestyle budget and payment agent for Nigerians. Help people find trusted help nearby (Cravour Partners first, then other verified businesses), make an ad with Ad Maker, post it to Reels, and keep a budget in naira. The in-app wallet is Practice Wallet test money and cannot be withdrawn. Real merchant payments use Bach delivery escrow and Flutterwave bank transfers only after user confirmation. WhatsApp is for codes, budget updates, routine reminders, and support. Use only available tools. Never invent prices, shops, ratings, or a withdrawal. Payments need a clear yes in the app.`;
++export const SAVVY_VOICE_SHORT_PROMPT = `You are Savvy, Cravour's lifestyle budget and payment agent for Nigerians. Help people find trusted help nearby (Cravour Partners first, then other verified businesses), make an ad with Ad Maker, post it to Reels, and keep a budget in naira. Posters, video, and copy use an automatic provider fallback chain — never promise one fixed model; voice and jingles are ElevenLabs. The in-app wallet is Practice Wallet test money and cannot be withdrawn. Real merchant payments use Bach delivery escrow and Flutterwave bank transfers only after user confirmation. WhatsApp is for codes, budget updates, routine reminders, and support; a WhatsApp sender links their account with a "link CODE" from Ad Maker. Use only available tools. Never invent prices, shops, ratings, or a withdrawal. Payments need a clear yes in the app.`;
+ 
+diff --git a/functions/src/routes/creativeRoutes.ts b/functions/src/routes/creativeRoutes.ts
+index 1441c4c7a3..47ac4c4d0a 100644
+--- a/functions/src/routes/creativeRoutes.ts
++++ b/functions/src/routes/creativeRoutes.ts
+@@ -1366,4 +1366,77 @@ router.post(
+   })
+ );
+ 
++/**
++ * POST /creative/whatsapp/link-code
++ * Logged-in user mints a short code shown in Ad Maker → WhatsApp.
++ * Sending "link CODE" to the WhatsApp agent ties that phone to this account,
++ * so image/sound/video generation uses their plan and lands in their history.
++ */
++router.post(
++  "/whatsapp/link-code",
++  asyncHandler(async (req: ExpressRequest, res: ExpressResponse) => {
++    const userId = (req as any).user!.uid;
++    const { createWhatsAppLinkCode } = await import("../services/adMakerAssetStore.js");
++    const link = await createWhatsAppLinkCode(userId);
++    if (!link) {
++      res.status(503).json({ error: "Linking is not available right now. Try again." });
++      return;
++    }
++    res.status(200).json({ success: true, code: link.code, expiresAt: link.expiresAt });
++  })
++);
++
++/** GET /creative/whatsapp/link-status — has this account paired a WhatsApp number? */
++router.get(
++  "/whatsapp/link-status",
++  asyncHandler(async (req: ExpressRequest, res: ExpressResponse) => {
++    const userId = (req as any).user!.uid;
++    const { getWhatsAppLinkStatus } = await import("../services/adMakerAssetStore.js");
++    const status = await getWhatsAppLinkStatus(userId);
++    res.status(200).json({ success: true, ...status });
++  })
++);
++
++/**
++ * POST /creative/whatsapp/share-link
++ * Build the sharable Cravour → WhatsApp-agent link for an owned Ad Maker asset.
++ * The agent resolves cravour.com/ads?asset=<id> back to the file.
++ */
++router.post(
++  "/whatsapp/share-link",
++  asyncHandler(async (req: ExpressRequest, res: ExpressResponse) => {
++    const userId = (req as any).user!.uid;
++    const assetId = String(req.body?.assetId || "").trim().slice(0, 80);
++    if (!assetId) {
++      res.status(400).json({ error: "assetId is required." });
++      return;
++    }
++    const mongo = await getMongo();
++    if (!mongo) {
++      res.status(503).json({ error: "Ad Maker storage is not available right now." });
++      return;
++    }
++    const doc = await mongo
++      .db(MONGO_DB)
++      .collection(ASSETS_COL)
++      .findOne({ $or: [{ _id: assetId as any }, { id: assetId }] });
++    if (!doc) {
++      res.status(404).json({ error: "Asset not found in your Ad Maker history." });
++      return;
++    }
++    const owner = String((doc as any).userId || (doc as any).authorId || "");
++    if (owner && owner !== userId) {
++      res.status(403).json({ error: "You can only share your own Ad Maker file." });
++      return;
++    }
++    const { CRAVOUR_WHATSAPP_E164 } = await import("../services/elevenLabsWhatsAppService.js");
++    const assetUrl = `https://cravour.com/ads?asset=${encodeURIComponent(assetId)}`;
++    const title = String((doc as any).title || "my Cravour ad").slice(0, 80);
++    const message = `Open my Ad Maker file "${title}": ${assetUrl}`;
++    const waNumber = String(CRAVOUR_WHATSAPP_E164 || "").replace(/\D/g, "");
++    const waLink = `https://wa.me/${waNumber}?text=${encodeURIComponent(message)}`;
++    res.status(200).json({ success: true, assetId, assetUrl, waLink, message });
++  })
++);
++
+ export default router;
+diff --git a/functions/src/routes/publicRoutes.ts b/functions/src/routes/publicRoutes.ts
+index 8605009289..b9778ab0ac 100644
+--- a/functions/src/routes/publicRoutes.ts
++++ b/functions/src/routes/publicRoutes.ts
+@@ -438,6 +438,50 @@ router.get("/reel/:id/comments", asyncHandler(async (req: ExpressRequest, res: E
+   res.status(200).json({ comments });
+ }));
+ 
++/**
++ * GET /public/asset/:id — public Ad Maker asset card.
++ * Lets the WhatsApp agent (and share previews) resolve a
++ * cravour.com/ads?asset=<id> link without authentication.
++ * Private fields (prompt, userId, emails) are never returned.
++ */
++router.get("/asset/:id", asyncHandler(async (req: ExpressRequest, res: ExpressResponse) => {
++  const id = String(req.params.id || "").slice(0, 80);
++  const { tryGetDbClient } = await import("../config/db.js");
++  const mongo = await tryGetDbClient();
++  if (!mongo) {
++    res.status(503).json({ error: "Ad Maker is not available right now." });
++    return;
++  }
++  const ors: Record<string, unknown>[] = [{ id }, { _id: id as any }];
++  if (/^[a-f0-9]{24}$/i.test(id)) {
++    try {
++      const { ObjectId } = await import("mongodb");
++      ors.push({ _id: new ObjectId(id) });
++    } catch {
++      /* not an ObjectId */
++    }
++  }
++  const doc = await mongo.db("cravour-mongodb").collection("creative_assets").findOne({ $or: ors });
++  if (!doc) {
++    res.status(404).json({ error: "Asset not found." });
++    return;
++  }
++  const { toPublicReel } = await import("../services/publicReelPayload.js");
++  const card = toPublicReel(doc as any);
++  res.setHeader("Cache-Control", "public, max-age=30, s-maxage=60");
++  res.status(200).json({
++    success: true,
++    asset: card || {
++      id: String((doc as any).id || (doc as any)._id),
++      type: String((doc as any).type || "image"),
++      title: String((doc as any).title || "Cravour ad").slice(0, 140),
++    },
++    assetUrl: `https://cravour.com/ads?asset=${encodeURIComponent(String((doc as any).id || (doc as any)._id))}`,
++    reelUrl: "https://cravour.com/reel",
++    published: (doc as any).published === true,
++  });
++}));
++
+ router.get("/savvy-context", asyncHandler(async (_req: ExpressRequest, res: ExpressResponse) => {
+   const { getSavvyPlatformSnapshot } = await import("../services/savvyPlatformService.js");
+   const snapshot = await getSavvyPlatformSnapshot();
+diff --git a/functions/src/services/adMakerAssetStore.ts b/functions/src/services/adMakerAssetStore.ts
+index 352617c88d..9b816b441b 100644
+--- a/functions/src/services/adMakerAssetStore.ts
++++ b/functions/src/services/adMakerAssetStore.ts
+@@ -27,6 +27,15 @@ async function storeInGridFS(userId: string, type: string, content: string): Pro
+   return { ref: `gridfs:${String(fileId)}`, size: buffer.length };
+ }
+ 
++function normalizePhoneDigits(phone?: string): string {
++  const digits = String(phone || "").replace(/\D/g, "");
++  if (!digits) return "";
++  if (digits.startsWith("2340") && digits.length === 14) return `234${digits.slice(4)}`;
++  if (digits.startsWith("0") && digits.length === 11) return `234${digits.slice(1)}`;
++  if (digits.length === 10) return `234${digits}`;
++  return digits;
++}
++
+ /** Same creative_assets document the Ad Maker history list reads. */
+ export async function saveAdMakerAsset(input: {
+   userId: string;
+@@ -34,6 +43,8 @@ export async function saveAdMakerAsset(input: {
+   prompt: string;
+   content: string;
+   title?: string;
++  /** Raw caller phone (E.164 or local). Stored so the owner can claim it after linking. */
++  phone?: string;
+ }): Promise<{ id: string } | null> {
+   const db = await tryGetMongoDb(MONGO_DB);
+   if (!db) return null;
+@@ -54,6 +65,7 @@ export async function saveAdMakerAsset(input: {
+   const id = `asset_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+   const now = new Date();
+   const title = String(input.title || input.prompt || "Cravour ad").slice(0, 140);
++  const whatsappPhone = normalizePhoneDigits(input.phone);
+   await db.collection(ASSETS_COL).insertOne({
+     _id: id,
+     id,
+@@ -61,7 +73,7 @@ export async function saveAdMakerAsset(input: {
+     title,
+     type: input.type,
+     content: assetContent,
+-    metadata: { source: "agent-tool", title },
++    metadata: { source: "agent-tool", title, ...(whatsappPhone ? { whatsappPhone } : {}) },
+     createdAt: now,
+     updatedAt: now,
+     isStoredInGridFS,
+@@ -76,6 +88,99 @@ export async function saveAdMakerAsset(input: {
+     forSale: false,
+     salePrice: 0,
+     backend: "mongodb",
++    ...(whatsappPhone ? { whatsappPhone } : {}),
+   } as any);
+   return { id };
+ }
++
++/**
++ * WhatsApp ↔ Cravour account linking for logged-in generation.
++ * The Ad Maker page issues a short code (authed); the user sends
++ * "link CODE" to the WhatsApp agent, which maps their phone to the uid
++ * and re-homes any `wa:<phone>` assets they created before linking.
++ */
++const LINKS_COL = "whatsapp_links";
++
++function makeLinkCode(): string {
++  const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
++  let code = "";
++  const bytes = new Uint8Array(6);
++  for (let i = 0; i < 6; i += 1) bytes[i] = Math.floor(Math.random() * alphabet.length);
++  for (const b of bytes) code += alphabet[b];
++  return code;
++}
++
++export async function createWhatsAppLinkCode(userId: string): Promise<{ code: string; expiresAt: Date } | null> {
++  const db = await tryGetMongoDb(MONGO_DB);
++  if (!db) return null;
++  const code = makeLinkCode();
++  const now = new Date();
++  const expiresAt = new Date(now.getTime() + 15 * 60 * 1000);
++  await db.collection(LINKS_COL).insertOne({
++    _id: `walink_${code}`,
++    code,
++    userId: String(userId),
++    createdAt: now,
++    expiresAt,
++    claimedBy: null,
++    claimedAt: null,
++  } as any);
++  return { code, expiresAt };
++}
++
++export async function claimWhatsAppLink(
++  code: string,
++  phoneDigits: string
++): Promise<{ userId: string } | { error: string }> {
++  const db = await tryGetMongoDb(MONGO_DB);
++  if (!db) return { error: "Linking is not available right now. Try again." };
++  const clean = String(code || "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 12);
++  if (clean.length < 4) return { error: "That code looks too short. Copy the full code from Ad Maker." };
++  const row = await db.collection(LINKS_COL).findOne({ code: clean });
++  if (!row) return { error: "I could not find that code. Make a fresh one in Ad Maker → WhatsApp." };
++  if ((row as any).claimedBy) return { error: "That code was already used. Make a fresh one in Ad Maker → WhatsApp." };
++  if ((row as any).expiresAt && new Date((row as any).expiresAt).getTime() < Date.now()) {
++    return { error: "That code expired. Make a fresh one in Ad Maker → WhatsApp." };
++  }
++  const phone = normalizePhoneDigits(phoneDigits);
++  if (!phone) return { error: "I could not read your number. Try again." };
++  const userId = String((row as any).userId || "");
++  if (!userId) return { error: "That code has no owner. Make a fresh one in Ad Maker → WhatsApp." };
++  // Persist phone on the user doc so future lookups resolve to the real account + tier.
++  try {
++    await db.collection("users").updateOne(
++      { $or: [{ _id: userId as any }, { uid: userId }] },
++      { $set: { phoneNumber: `+${phone}`, whatsappPhone: phone, whatsappLinkedAt: new Date(), updatedAt: new Date() } }
++    );
++  } catch {
++    /* non-blocking */
++  }
++  // Re-home assets the sender created before linking so Ad Maker history shows them.
++  try {
++    await db.collection(ASSETS_COL).updateMany(
++      { $or: [{ userId: `wa:${phone}` }, { whatsappPhone: phone }, { "metadata.whatsappPhone": phone }] },
++      { $set: { userId, uid: userId, authorId: userId, updatedAt: new Date() } }
++    );
++  } catch {
++    /* non-blocking */
++  }
++  await db.collection(LINKS_COL).updateOne(
++    { code: clean },
++    { $set: { claimedBy: phone, claimedAt: new Date() } }
++  );
++  return { userId };
++}
++
++export async function getWhatsAppLinkStatus(userId: string): Promise<{ linked: boolean; phone?: string }> {
++  try {
++    const db = await tryGetMongoDb(MONGO_DB);
++    if (!db) return { linked: false };
++    const row = await db.collection(LINKS_COL).findOne({ userId: String(userId), claimedBy: { $ne: null } });
++    if (row) return { linked: true, phone: String((row as any).claimedBy || "") };
++    const user = await db.collection("users").findOne({ $or: [{ _id: String(userId) as any }, { uid: String(userId) }] });
++    const phone = String((user as any)?.whatsappPhone || (user as any)?.phoneNumber || "");
++    return phone ? { linked: true, phone } : { linked: false };
++  } catch {
++    return { linked: false };
++  }
++}
+diff --git a/functions/src/services/agentToolHandlers.ts b/functions/src/services/agentToolHandlers.ts
+index cc8948063e..66765f455a 100644
+--- a/functions/src/services/agentToolHandlers.ts
++++ b/functions/src/services/agentToolHandlers.ts
+@@ -31,6 +31,10 @@ export type AgentToolResult = {
+   kind: string;
+   summary: string;
+   assetId?: string;
++  /** Shareable Ad Maker deep link for this asset (cravour.com/ads?asset=...). */
++  assetUrl?: string;
++  /** Direct http(s) media URL when the provider returned one (video). Base64 media stays in chat only. */
++  mediaUrl?: string | null;
+   mediaSent?: boolean;
+   adsUrl?: string;
+   reelUrl?: string;
+@@ -40,6 +44,11 @@ export type AgentToolResult = {
+   sellers?: NearbySeller[];
+ };
+ 
++/** Shareable Ad Maker link for an asset id. WhatsApp agent resolves this back to the asset. */
++export function adMakerAssetUrl(assetId: string): string {
++  return `https://cravour.com/ads?asset=${encodeURIComponent(assetId)}`;
++}
++
+ type SellerPlace = Pick<MapPlace, "name" | "address" | "phone" | "distanceStr" | "isVerified" | "source" | "isCravourShop" | "description" | "products" | "items" | "services">;
+ 
+ function friendlyFailure(kind: string, err: unknown): AgentToolResult {
+@@ -149,18 +158,21 @@ export async function createImage(input: AgentToolInput): Promise<AgentToolResul
+     const image = await generateImageFromPrompt({ prompt, aspectRatio: input.aspectRatio || "1:1" });
+     const content = String(image?.base64Image || "");
+     if (!content) throw new Error("The image provider returned nothing.");
+-    const saved = await saveAdMakerAsset({ userId, type: "image", prompt, content, title: prompt.slice(0, 80) });
++    const saved = await saveAdMakerAsset({ userId, type: "image", prompt, content, title: prompt.slice(0, 80), phone: input.callerId });
+     const mediaSent = await deliverWhatsAppMedia(input, { kind: "image", content, caption: "Your Cravour poster is ready." });
++    const assetUrl = saved?.id ? adMakerAssetUrl(saved.id) : ADS_URL;
+     return {
+       ok: true,
+       kind: "image",
+       assetId: saved?.id,
++      assetUrl,
+       mediaSent,
++      mediaUrl: null,
+       adsUrl: ADS_URL,
+       reelUrl: REEL_URL,
+       summary: mediaSent
+-        ? `Your poster is in this chat and saved in Ad Maker. You can share it to Reels. ${ADS_URL}`
+-        : `Your poster is saved in Ad Maker. Review it before sharing: ${ADS_URL}`,
++        ? `Your poster is in this chat and saved in Ad Maker. Open it here: ${assetUrl} — reply "post it" and I will share it to Reels.`
++        : `Your poster is saved in Ad Maker. Review it before sharing: ${assetUrl}`,
+     };
+   } catch (err) {
+     await rollbackUsage(userId, "image").catch(() => undefined);
+@@ -202,7 +214,7 @@ export async function createVideo(input: AgentToolInput): Promise<AgentToolResul
+     const still = String(video?.storyboardImage || video?.imageUrl || "");
+     const audio = String(video?.audioBase64 || "");
+     if (videoUrl) {
+-      const saved = await saveAdMakerAsset({ userId, type: "video", prompt, content: videoUrl, title: prompt.slice(0, 80) });
++      const saved = await saveAdMakerAsset({ userId, type: "video", prompt, content: videoUrl, title: prompt.slice(0, 80), phone: input.callerId });
+       const remote = /^https?:\/\//i.test(videoUrl);
+       const mediaSent = await deliverWhatsAppMedia(input, {
+         kind: "video",
+@@ -210,42 +222,51 @@ export async function createVideo(input: AgentToolInput): Promise<AgentToolResul
+         content: remote ? undefined : videoUrl,
+         caption: "Your Cravour video is ready.",
+       });
++      const assetUrl = saved?.id ? adMakerAssetUrl(saved.id) : ADS_URL;
+       return {
+         ok: true,
+         kind: "video",
+         assetId: saved?.id,
++        assetUrl,
+         mediaSent,
++        mediaUrl: remote ? videoUrl : null,
+         adsUrl: ADS_URL,
+         reelUrl: REEL_URL,
+         summary: mediaSent
+-          ? `Your video is in this chat and saved in Ad Maker. You can share it to Reels. ${ADS_URL}`
+-          : `Your video is saved in Ad Maker. Review it before sharing: ${ADS_URL}`,
++          ? `Your video is in this chat and saved in Ad Maker. Open it here: ${assetUrl} — reply "post it" and I will share it to Reels.`
++          : `Your video is saved in Ad Maker. Review it before sharing: ${assetUrl}`,
+       };
+     }
+     if (still) {
+-      const saved = await saveAdMakerAsset({ userId, type: "image", prompt, content: still, title: prompt.slice(0, 80) });
++      const saved = await saveAdMakerAsset({ userId, type: "image", prompt, content: still, title: prompt.slice(0, 80), phone: input.callerId });
+       const mediaSent = await deliverWhatsAppMedia(input, { kind: "image", content: still, caption: "Your clip is still rendering. Here is a still." });
++      const assetUrl = saved?.id ? adMakerAssetUrl(saved.id) : ADS_URL;
+       return {
+         ok: true,
+         kind: "video",
+         assetId: saved?.id,
++        assetUrl,
+         mediaSent,
++        mediaUrl: null,
+         adsUrl: ADS_URL,
+         reelUrl: REEL_URL,
+-        summary: `The clip is still rendering. I saved a still in Ad Maker so you can share it when the video is ready. ${ADS_URL}`,
++        summary: `The clip is still rendering. I saved a still in Ad Maker so you can share it when the video is ready. ${assetUrl}`,
+       };
+     }
+     if (audio) {
+       const content = audio.startsWith("data:") ? audio : `data:audio/mpeg;base64,${audio}`;
+-      const saved = await saveAdMakerAsset({ userId, type: "voice", prompt, content, title: prompt.slice(0, 80) });
++      const saved = await saveAdMakerAsset({ userId, type: "voice", prompt, content, title: prompt.slice(0, 80), phone: input.callerId });
+       const mediaSent = await deliverWhatsAppMedia(input, { kind: "audio", content, caption: "Narration while the clip renders." });
++      const assetUrl = saved?.id ? adMakerAssetUrl(saved.id) : ADS_URL;
+       return {
+         ok: true,
+         kind: "video",
+         assetId: saved?.id,
++        assetUrl,
+         mediaSent,
++        mediaUrl: null,
+         adsUrl: ADS_URL,
+-        summary: `The clip is still rendering. I saved the narration in Ad Maker. ${ADS_URL}`,
++        summary: `The clip is still rendering. I saved the narration in Ad Maker. ${assetUrl}`,
+       };
+     }
+     throw new Error(video?.message || "The video provider returned nothing.");
+@@ -269,18 +290,21 @@ export async function createSong(input: AgentToolInput): Promise<AgentToolResult
+   try {
+     const track = await generateMusicTrack({ prompt, durationMs });
+     const content = track.audioBase64.startsWith("data:") ? track.audioBase64 : `data:audio/mpeg;base64,${track.audioBase64}`;
+-    const saved = await saveAdMakerAsset({ userId, type: "voice", prompt, content, title: prompt.slice(0, 80) });
++    const saved = await saveAdMakerAsset({ userId, type: "voice", prompt, content, title: prompt.slice(0, 80), phone: input.callerId });
+     const mediaSent = await deliverWhatsAppMedia(input, { kind: "audio", content, caption: "Your Cravour jingle is ready." });
++    const assetUrl = saved?.id ? adMakerAssetUrl(saved.id) : ADS_URL;
+     return {
+       ok: true,
+       kind: "song",
+       assetId: saved?.id,
++      assetUrl,
+       mediaSent,
++      mediaUrl: null,
+       adsUrl: ADS_URL,
+       reelUrl: REEL_URL,
+       summary: mediaSent
+-        ? `Your jingle is in this chat and saved in Ad Maker. You can share it to Reels. ${ADS_URL}`
+-        : `Your jingle is saved in Ad Maker. Review it before sharing: ${ADS_URL}`,
++        ? `Your jingle is in this chat and saved in Ad Maker. Open it here: ${assetUrl} — reply "post it" and I will share it to Reels.`
++        : `Your jingle is saved in Ad Maker. Review it before sharing: ${assetUrl}`,
+     };
+   } catch (err) {
+     await rollbackUsage(userId, "voice").catch(() => undefined);
+@@ -319,7 +343,7 @@ export async function shareToReels(input: AgentToolInput): Promise<AgentToolResu
+       { $set: { published: true, publishedAt: new Date(), updatedAt: new Date(), title: prepared.doc.title } }
+     );
+     const id = String((existing as any).id || (existing as any)._id);
+-    return { ok: true, kind: "reel", assetId: id, summary: `Posted to Reels. ${REEL_URL}`, adsUrl: ADS_URL, reelUrl: REEL_URL, mediaSent: false };
++    return { ok: true, kind: "reel", assetId: id, assetUrl: adMakerAssetUrl(id), summary: `Posted to Reels. Watch it here: ${REEL_URL}`, adsUrl: ADS_URL, reelUrl: REEL_URL, mediaSent: false };
+   }
+   const now = new Date();
+   await col.insertOne({ ...prepared.doc, createdAt: now, updatedAt: now, publishedAt: now, published: true } as any);
+@@ -327,7 +351,8 @@ export async function shareToReels(input: AgentToolInput): Promise<AgentToolResu
+     ok: true,
+     kind: "reel",
+     assetId: prepared.docId,
+-    summary: `Posted to Reels. ${REEL_URL}`,
++    assetUrl: adMakerAssetUrl(prepared.docId),
++    summary: `Posted to Reels. Watch it here: ${REEL_URL}`,
+     adsUrl: ADS_URL,
+     reelUrl: REEL_URL,
+     mediaSent: false,
+diff --git a/functions/src/services/aiService.ts b/functions/src/services/aiService.ts
+index 1211485f90..eacfd6bc10 100644
+--- a/functions/src/services/aiService.ts
++++ b/functions/src/services/aiService.ts
+@@ -3685,11 +3685,19 @@ export const generateVoiceAd = async (text: string, gender: string, customKeys?:
+   if (voiceOptions?.model_id) elevenOptions.model_id = voiceOptions.model_id;
+   if (voiceOptions?.voice_settings) elevenOptions.voice_settings = voiceOptions.voice_settings;
+ 
+-  // MongoDB voice cache (Vercel — no Firestore)
++  // MongoDB voice cache (Vercel — no Firestore). The key covers voice, model,
++  // and settings so a settings change never returns stale audio.
+   let textHash = "";
+   try {
+     const crypto = await import("crypto");
+-    textHash = crypto.createHash("md5").update(text.trim() + "_" + voiceId).digest("hex");
++    const cacheFingerprint = JSON.stringify({
++      text: text.trim(),
++      voiceId,
++      gender: String(gender || "").toLowerCase(),
++      model: voiceOptions?.model_id || "",
++      settings: voiceOptions?.voice_settings || null,
++    });
++    textHash = crypto.createHash("md5").update(cacheFingerprint).digest("hex");
+     const client = await getDbClient();
+     const cached = await client
+       .db("cravour-mongodb")
+diff --git a/functions/src/services/unifiedVoiceService.ts b/functions/src/services/unifiedVoiceService.ts
+index 3d6b8aab05..35333230e0 100644
+--- a/functions/src/services/unifiedVoiceService.ts
++++ b/functions/src/services/unifiedVoiceService.ts
+@@ -70,6 +70,11 @@ function pickVoiceId(input: VoiceSynthInput): string[] {
+   return [...new Set(fallbacks.filter(Boolean))];
+ }
+ 
++function isElevenAuthError(err: unknown): boolean {
++  const msg = String((err as any)?.message || err || "");
++  return /401|402|403|429|quota_exceeded|quota exceeded|unauthorized|forbidden|invalid_api_key|invalid api key|rate_limit|payment_required/i.test(msg);
++}
++
+ async function elevenViaSdk(
+   text: string,
+   voiceId: string,
+@@ -103,7 +108,14 @@ async function elevenViaSdk(
+       return Buffer.concat(chunks).toString("base64");
+     }
+     return null;
+-  } catch (_err: unknown) {
++  } catch (err: unknown) {
++    // Auth/quota failures must surface immediately so the caller can stop
++    // cycling through voices and models with a dead key.
++    if (isElevenAuthError(err)) {
++      const marker = new Error(`ELEVENLABS_AUTH: ${String((err as any)?.message || err).slice(0, 160)}`);
++      (marker as any).elevenAuth = true;
++      throw marker;
++    }
+     // Graceful fallback to direct HTTP endpoint
+     return null;
+   }
+@@ -287,7 +299,7 @@ export async function synthesizeSpeech(input: VoiceSynthInput): Promise<VoiceSyn
+           }
+         } catch (err: any) {
+           lastErr = err?.message || String(err);
+-          if (/401|429|quota_exceeded|unauthorized/i.test(lastErr)) {
++          if ((err as any)?.elevenAuth || /401|402|403|429|quota_exceeded|quota exceeded|unauthorized|forbidden|invalid_api_key|payment_required/i.test(lastErr)) {
+             shouldBreakAll = true;
+             break;
+           }
+@@ -547,6 +559,47 @@ export async function generateSoundEffect(params: {
+   }
+ }
+ 
++/**
++ * Transcribe a WhatsApp voice note (or any short audio clip) with
++ * ElevenLabs Scribe v2. Handles the opus-in-ogg blobs WhatsApp sends.
++ * Throws when no ElevenLabs key is configured so callers can fall back.
++ */
++export async function transcribeWithElevenLabs(opts: {
++  audioBuffer: Buffer;
++  mimeType?: string;
++  languageCode?: string;
++  apiKey?: string;
++  modelId?: string;
++}): Promise<string> {
++  const key = resolveElevenKey(opts.apiKey);
++  if (!key) throw new Error("ELEVENLABS_API_KEY is required for ElevenLabs transcription");
++  const mime = opts.mimeType || "audio/ogg";
++  const ext = mime.includes("mp4") || mime.includes("m4a") || mime.includes("aac")
++    ? "m4a"
++    : mime.includes("mp3") || mime.includes("mpeg")
++      ? "mp3"
++      : mime.includes("wav")
++        ? "wav"
++        : "ogg";
++  const form = new FormData();
++  form.append("file", new Blob([new Uint8Array(opts.audioBuffer)], { type: mime }), `voice.${ext}`);
++  form.append("model_id", opts.modelId || process.env.ELEVENLABS_STT_MODEL || "scribe_v2");
++  if (opts.languageCode) form.append("language_code", opts.languageCode);
++
++  const res = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
++    method: "POST",
++    headers: { "xi-api-key": key },
++    body: form,
++    signal: AbortSignal.timeout(45000) as any,
++  });
++  if (!res.ok) {
++    const errText = await res.text().catch(() => "");
++    throw new Error(`ElevenLabs transcription HTTP ${res.status}: ${errText.slice(0, 200)}`);
++  }
++  const json = (await res.json()) as { text?: string };
++  return String(json?.text || "").trim();
++}
++
+ /**
+  * Shared ElevenLabs subscription and voice capacity resolver.
+  * Eliminates duplicate subscription fetch logic across creativeRoutes and aiRoutes.
+diff --git a/functions/src/services/whatsappAgentService.ts b/functions/src/services/whatsappAgentService.ts
+index 76b42aadbb..601368c59d 100644
+--- a/functions/src/services/whatsappAgentService.ts
++++ b/functions/src/services/whatsappAgentService.ts
+@@ -45,9 +45,14 @@ export interface WhatsAppAgentResponse {
+   replyText: string;
+   actionTaken?: string;
+   mediaUrl?: string | null;
++  /** True when the media was already delivered in-chat by the tool call. */
++  mediaSent?: boolean;
+   links?: string[];
+ }
+ 
++import { extractSharedAssetId } from "./whatsappCreativeIntent.js";
++export { extractSharedAssetId };
++
+ /**
+  * Clean & normalize incoming phone numbers
+  */
+@@ -75,7 +80,88 @@ export async function processWhatsAppMessage(
+ 
+   logger.info(`[WhatsAppAgent] Inbound from ${fromNumber}: "${rawText}"`);
+ 
++  // 0a. Account linking: "link CODE" maps this phone to the logged-in Cravour account,
++  // so generation uses the owner's tier and assets land in their Ad Maker history.
++  const linkMatch = rawText.match(/^\s*link\s+([A-Za-z0-9-]{4,12})\s*$/i);
++  if (linkMatch) {
++    try {
++      const { claimWhatsAppLink } = await import("./adMakerAssetStore.js");
++      const claimed = await claimWhatsAppLink(linkMatch[1], fromNumber);
++      if ("userId" in claimed) {
++        return {
++          replyText: [
++            `*Linked.* Your WhatsApp number is now tied to your Cravour account.`,
++            `Posters, videos, and jingles you make here will appear in your Ad Maker history with your plan limits.`,
++            ``,
++            `Try: "make me a flyer for my shawarma spot".`,
++          ].join("\n"),
++          actionTaken: "whatsapp_link",
++          links: ["https://cravour.com/ads"],
++        };
++      }
++      return {
++        replyText: `${claimed.error}\nOpen Ad Maker → WhatsApp to get a code:\nhttps://cravour.com/ads`,
++        actionTaken: "whatsapp_link_failed",
++        links: ["https://cravour.com/ads"],
++      };
++    } catch (err: any) {
++      logger.warn(`[WhatsAppAgent] link failed: ${err?.message || err}`);
++    }
++  }
++
++  // 0b. Shared Ad Maker link: resolve a pasted cravour.com/ads?asset=... link back to the asset.
++  const sharedAssetId = extractSharedAssetId(rawText);
++  if (sharedAssetId && /cravour\.com|asset_|post it|share|reel/i.test(rawText)) {
++    try {
++      const { tryGetMongoDb } = await import("../config/db.js");
++      const db = await tryGetMongoDb("cravour-mongodb");
++      const doc = db
++        ? await db.collection("creative_assets").findOne({
++            $or: [{ _id: sharedAssetId as any }, { id: sharedAssetId }],
++          })
++        : null;
++      if (doc) {
++        const title = String((doc as any).title || (doc as any).prompt || "your ad").slice(0, 80);
++        const type = String((doc as any).type || "ad");
++        const published = (doc as any).published === true;
++        const wantsPost = /\b(post it|share|publish|reel)\b/i.test(rawText);
++        if (wantsPost) {
++          const { shareToReels } = await import("./agentToolHandlers.js");
++          const posted = await shareToReels({
++            channel: "whatsapp",
++            callerId: fromNumber,
++            assetId: sharedAssetId,
++          } as any);
++          return {
++            replyText: posted.ok
++              ? `*Done.* "${title}" is now on Cravour Reels. https://cravour.com/reel`
++              : `${posted.summary}`,
++            actionTaken: posted.ok ? "share_asset_link" : "share_asset_link_failed",
++            links: [posted.reelUrl || "https://cravour.com/reel"],
++          };
++        }
++        return {
++          replyText: [
++            `*Found it:* "${title}" (${type})${published ? " — already on Reels" : ""}.`,
++            `Reply *"post it"* and I will share it to Cravour Reels, or tell me what to change: "make the headline shorter".`,
++          ].join("\n"),
++          actionTaken: "open_asset_link",
++          links: [`https://cravour.com/ads?asset=${encodeURIComponent(sharedAssetId)}`],
++        };
++      }
++      return {
++        replyText: `I could not open that Ad Maker link. It may be from another account or expired. Paste it again or make a new one:\nhttps://cravour.com/ads`,
++        actionTaken: "open_asset_link_failed",
++        links: ["https://cravour.com/ads"],
++      };
++    } catch (err: any) {
++      logger.warn(`[WhatsAppAgent] asset link failed: ${err?.message || err}`);
++    }
++  }
++
+   // 0. Creative Intent: Posters, Videos, and Jingles (Evaluated first for immediate fulfillment)
++  // Runs as the linked Cravour account when the sender paired with "link CODE",
++  // so logged-in users get their own plan limits and Ad Maker history.
+   const creative = detectWhatsAppCreativeIntent(rawText);
+   if (creative) {
+     try {
+@@ -95,8 +181,9 @@ export async function processWhatsAppMessage(
+       return {
+         replyText: result.summary,
+         actionTaken: result.ok ? `generate_${creative.kind}` : `${creative.kind}_failed`,
+-        mediaUrl: (result as any).imageUrl || (result as any).videoUrl || null,
+-        links: [result.adsUrl || "https://cravour.com/ads"],
++        mediaSent: result.mediaSent === true,
++        mediaUrl: result.mediaUrl || null,
++        links: [result.assetUrl || result.adsUrl || "https://cravour.com/ads"],
+       };
+     } catch (err: any) {
+       logger.warn(`[WhatsAppAgent] ${creative.kind} failed: ${err?.message || err}`);
+@@ -650,11 +737,12 @@ export async function handleWhatsAppWebhookPayload(body: any): Promise<{ handled
+           userText = msg.location.name || msg.location.address || `location: ${msg.location.latitude}, ${msg.location.longitude}`;
+         } else if (msg.type === "audio" || msg.type === "voice") {
+           const audioId = msg.audio?.id || msg.voice?.id;
++          let inboundWasVoice = false;
+           if (audioId) {
+             try {
+               const { getWhatsAppDirectSendConfig } = await import("./whatsAppDirectSendService.js");
+               const config = getWhatsAppDirectSendConfig();
+-              if (config.token && hasMuseKey()) {
++              if (config.token) {
+                 const mediaRes = await fetch(`https://graph.facebook.com/${config.apiVersion}/${audioId}`, {
+                   headers: { Authorization: `Bearer ${config.token}` },
+                 });
+@@ -667,9 +755,20 @@ export async function handleWhatsAppWebhookPayload(body: any): Promise<{ handled
+                     if (audioRes.ok) {
+                       const audioBuf = Buffer.from(await audioRes.arrayBuffer());
+                       const mime = mediaMeta.mime_type || "audio/ogg";
+-                      const { transcribeWithMuse } = await import("../config/museClient.js");
+-                      userText = await transcribeWithMuse({ audioBuffer: audioBuf, mimeType: mime });
+-                      logger.info(`[WhatsAppAgent] Transcribed audio from ${from}: "${userText}"`);
++                      // ElevenLabs Scribe first (handles WhatsApp opus-in-ogg), Muse fallback.
++                      try {
++                        const { transcribeWithElevenLabs } = await import("./unifiedVoiceService.js");
++                        userText = await transcribeWithElevenLabs({ audioBuffer: audioBuf, mimeType: mime });
++                        logger.info(`[WhatsAppAgent] Scribe transcribed audio from ${from}: "${userText}"`);
++                      } catch (scribeErr: any) {
++                        logger.warn(`[WhatsAppAgent] Scribe STT notice: ${scribeErr?.message || scribeErr}`);
++                        if (hasMuseKey()) {
++                          const { transcribeWithMuse } = await import("../config/museClient.js");
++                          userText = await transcribeWithMuse({ audioBuffer: audioBuf, mimeType: mime });
++                          logger.info(`[WhatsAppAgent] Muse transcribed audio from ${from}: "${userText}"`);
++                        }
++                      }
++                      if (userText) inboundWasVoice = true;
+                     }
+                   }
+                 }
+@@ -681,6 +780,7 @@ export async function handleWhatsAppWebhookPayload(body: any): Promise<{ handled
+           if (!userText) {
+             userText = "voice note";
+           }
++          (msg as any).__voiceNote = inboundWasVoice;
+         }
+ 
+         if (!userText) continue;
+@@ -699,11 +799,14 @@ export async function handleWhatsAppWebhookPayload(body: any): Promise<{ handled
+           repliesSent++;
+           logger.info(`[WhatsAppAgent] Reply sent to ${from}`);
+ 
+-          if (response.mediaUrl) {
++          // Creative tools already stream the file in-chat (mediaSent); only
++          // send here when the tool returned a fresh http(s) URL that was
++          // not delivered yet (e.g. a hosted video URL).
++          if (response.mediaUrl && !response.mediaSent) {
+             try {
+               await sendWhatsAppMediaMessage({
+                 to: from,
+-                kind: "image",
++                kind: "video",
+                 mediaUrl: response.mediaUrl,
+                 caption: response.replyText.slice(0, 120),
+               });
+@@ -712,6 +815,31 @@ export async function handleWhatsAppWebhookPayload(body: any): Promise<{ handled
+             }
+           }
+ 
++          // Voice in → voice out: the sender used a voice note, so follow the
++          // text reply with a short ElevenLabs spoken summary. Non-blocking.
++          if ((msg as any)?.__voiceNote === true) {
++            try {
++              const firstLines = String(response.replyText || "")
++                .replace(/\*/g, "")
++                .split(/\n+/)
++                .map((line) => line.trim())
++                .filter(Boolean)
++                .slice(0, 2)
++                .join(" ")
++                .slice(0, 400);
++              if (firstLines) {
++                const { synthesizeSpeech, UNIFIED_VOICES } = await import("./unifiedVoiceService.js");
++                const spoken = await synthesizeSpeech({ text: firstLines, voiceId: UNIFIED_VOICES.savvy });
++                const content = spoken.audioBase64.startsWith("data:")
++                  ? spoken.audioBase64
++                  : `data:audio/mpeg;base64,${spoken.audioBase64}`;
++                await sendWhatsAppMediaMessage({ to: from, kind: "audio", mediaBase64: content });
++              }
++            } catch (voiceErr: any) {
++              logger.warn(`[WhatsAppAgent] Voice reply notice: ${voiceErr?.message || voiceErr}`);
++            }
++          }
++
+           // One Contact per sender per day. A bot reply is not a ₦1 purchase.
+           try {
+             const { createHash } = await import("crypto");
+diff --git a/functions/src/services/whatsappCreativeIntent.ts b/functions/src/services/whatsappCreativeIntent.ts
+index db0707aa43..3e858e2e13 100644
+--- a/functions/src/services/whatsappCreativeIntent.ts
++++ b/functions/src/services/whatsappCreativeIntent.ts
+@@ -15,6 +15,19 @@ const IMAGE = /\b(?:flyers?|posters?|banners?|images?|pictures?|photos?|artworks
+ const LEADING_COMMAND =
+   /^(?:please\s+|abeg\s+|oya\s+|biko\s+|joo\s+)?(?:can you\s+)?(?:make|create|generate|design|produce|draw|compose|record)\s+(?:me\s+|us\s+)?(?:an?\s+|the\s+)?(?:\d{1,2}\s*(?:seconds?|secs?|s)\s+)?(?:songs?|jingles?|music|soundtrack|videos?|clips?|reels?|animations?|flyers?|posters?|banners?|images?|pictures?|photos?|artworks?)\s*(?:ad\s+)?(?:of|for|about)?\s*/i;
+ 
++/**
++ * Pull a Cravour Ad Maker / Reels asset id out of a pasted link such as
++ * https://cravour.com/ads?asset=asset_123 or https://cravour.com/reel?asset=...
++ * Pure helper — kept here so unit tests can import it without the agent stack.
++ */
++export function extractSharedAssetId(text: string): string | null {
++  const raw = String(text || "");
++  const match = raw.match(/cravour\.com\/[^\s]*[?&]asset=([A-Za-z0-9_-]{1,80})/i)
++    || raw.match(/\basset_[A-Za-z0-9]{3,20}\b/);
++  if (!match) return null;
++  return String(match[1] || match[0]).replace(/[^A-Za-z0-9_-]/g, "").slice(0, 80) || null;
++}
++
+ /**
+  * Natural WhatsApp requests such as "make me a flyer for my shawarma spot".
+  * Plain "make an ad" stays with ad-copy, because it names no picture, clip, or song.
+diff --git a/src/api-handlers/ai.ts b/src/api-handlers/ai.ts
+index d1c38c1000..2820918277 100644
+--- a/src/api-handlers/ai.ts
++++ b/src/api-handlers/ai.ts
+@@ -586,8 +586,8 @@ export default async function handler(
+       chosenProvider = 'gemini';
+     }
+     if (!aiProvider && isAdMakerImageVideo) {
+-      // Image/video handlers own cascade (Grok Imagine first via XAI_API_KEY)
+-      console.info("[Vercel AI] Ad Maker media — Grok Imagine cascade / free poster fallback");
++      // Image/video handlers own cascade (Muse → Grok → Gemini → OpenAI → ElevenLabs)
++      console.info("[Vercel AI] Ad Maker media — provider fallback cascade / free poster fallback");
+       if (hasSystemGrok) {
+         aiProvider = createOpenAI({ baseURL: "https://api.x.ai/v1", apiKey: systemGrokKey });
+         modelToUse = GROK_MODEL;
+diff --git a/src/api.ts b/src/api.ts
+index ea356e1274..676f24f7a8 100644
+--- a/src/api.ts
++++ b/src/api.ts
+@@ -4535,6 +4535,26 @@ export const sendWhatsAppBudgetAlert = async (
+   return data;
+ };
+ 
++/** Mint a short code in Ad Maker → WhatsApp; sender texts "link CODE" to the WhatsApp agent. */
++export const createWhatsAppLinkCode = async (): Promise<{ success: boolean; code: string; expiresAt: string }> => {
++  const { data } = await apiClient.post("/creative/whatsapp/link-code", {});
++  return data;
++};
++
++/** Has this account paired a WhatsApp number via a link code? */
++export const getWhatsAppLinkStatus = async (): Promise<{ success: boolean; linked: boolean; phone?: string }> => {
++  const { data } = await apiClient.get("/creative/whatsapp/link-status");
++  return data;
++};
++
++/** Build the sharable Cravour → WhatsApp-agent link for an owned Ad Maker asset. */
++export const getWhatsAppShareLink = async (
++  assetId: string
++): Promise<{ success: boolean; assetId: string; assetUrl: string; waLink: string; message: string }> => {
++  const { data } = await apiClient.post("/creative/whatsapp/share-link", { assetId });
++  return data;
++};
++
+ export const dispatchDueRoutinesReminders = async (
+   phone?: string
+ ): Promise<DispatchDueRemindersResponse> => {
+diff --git a/src/components/creative/AdsPage.tsx b/src/components/creative/AdsPage.tsx
+index b28e64a181..49ce03bb27 100644
+--- a/src/components/creative/AdsPage.tsx
++++ b/src/components/creative/AdsPage.tsx
+@@ -126,6 +126,96 @@ const WhatsAppSavvySend: FC<{ message: string }> = ({ message }) => {
+   );
+ };
+ 
++/**
++ * Link this account to the Savvy WhatsApp agent so posters, videos, and
++ * jingles made in chat generate with this plan and land in this history.
++ */
++const WhatsAppLinkPanel: FC = () => {
++  const [open, setOpen] = useState(false);
++  const [code, setCode] = useState<string | null>(null);
++  const [linked, setLinked] = useState<boolean | null>(null);
++  const [linkedPhone, setLinkedPhone] = useState("");
++  const [busy, setBusy] = useState(false);
++
++  useEffect(() => {
++    if (!open || linked !== null) return;
++    void api
++      .getWhatsAppLinkStatus()
++      .then((res) => {
++        setLinked(res.linked === true);
++        setLinkedPhone(String(res.phone || ""));
++      })
++      .catch(() => setLinked(false));
++  }, [open, linked]);
++
++  const mint = () => {
++    setBusy(true);
++    void api
++      .createWhatsAppLinkCode()
++      .then((res) => {
++        setCode(res.code);
++        showToast("Code ready — send it to Savvy on WhatsApp.", "success");
++      })
++      .catch((e: any) => showToast(e?.response?.data?.error || "Could not make a code.", "error"))
++      .finally(() => setBusy(false));
++  };
++
++  return (
++    <div className="relative">
++      <button
++        type="button"
++        onClick={() => setOpen((v) => !v)}
++        className="px-4 py-2 rounded-2xl text-xs font-black uppercase tracking-wider border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-all flex items-center gap-2"
++        title="Link your WhatsApp number so chat generations land here"
++      >
++        <MessageCircle size={14} /> {linked ? "WhatsApp linked" : "Link WhatsApp"}
++      </button>
++      {open && (
++        <div className="absolute right-0 z-30 mt-2 w-72 rounded-2xl border border-outline-variant/20 bg-surface-container p-4 shadow-xl space-y-3">
++          {linked ? (
++            <p className="text-xs text-on-surface-variant">
++              Linked{linkedPhone ? ` to ${linkedPhone}` : ""}. Posters, videos, and jingles you make on WhatsApp
++              appear in this history with your plan limits.
++            </p>
++          ) : (
++            <>
++              <p className="text-xs text-on-surface-variant">
++                Make a code, then send <span className="font-black text-on-surface">link CODE</span> to Savvy on
++                WhatsApp. Your chat generations will land here.
++              </p>
++              <div className="flex items-center gap-2">
++                <button
++                  type="button"
++                  onClick={mint}
++                  disabled={busy}
++                  className="px-3 py-2 rounded-xl bg-emerald-500 text-black text-[10px] font-black uppercase tracking-wider disabled:opacity-50"
++                >
++                  {busy ? "Making…" : code ? "New code" : "Make code"}
++                </button>
++                {code && (
++                  <button
++                    type="button"
++                    onClick={() => {
++                      void navigator.clipboard.writeText(code).then(
++                        () => showToast("Code copied.", "success"),
++                        () => showToast("Copy failed.", "error")
++                      );
++                    }}
++                    className="px-3 py-2 rounded-xl border border-outline-variant/30 text-xs font-black tracking-widest"
++                  >
++                    {code}
++                  </button>
++                )}
++              </div>
++              <p className="text-[10px] opacity-50">Codes expire after 15 minutes.</p>
++            </>
++          )}
++        </div>
++      )}
++    </div>
++  );
++};
++
+ type AdPromptTextareaProps = {
+   value: string;
+   onChange: (val: string) => void;
+@@ -4241,17 +4331,20 @@ const AdsPage: FC = () => {
+                <p className="text-[10px] font-black uppercase tracking-[0.3em] text-on-surface-variant/40">Your Past Generations Mapped to Cloud</p>
+              </div>
+           </div>
+-          <button
+-            type="button"
+-            onClick={() => {
+-              showToast("Reloading Creative Assets...", "info");
+-              void fetchPastAssets();
+-              void fetchVoiceCapacity();
+-            }}
+-            className="px-4 py-2 rounded-2xl text-xs font-black uppercase tracking-wider border border-outline-variant/20 bg-surface-container text-on-surface/60 hover:text-primary hover:border-primary/30 transition-all flex items-center gap-2 self-start sm:self-auto"
+-          >
+-            <RotateCcw size={14} className={isLoadingHistory ? "animate-spin" : ""} /> Reload
+-          </button>
++          <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
++            <WhatsAppLinkPanel />
++            <button
++              type="button"
++              onClick={() => {
++                showToast("Reloading Creative Assets...", "info");
++                void fetchPastAssets();
++                void fetchVoiceCapacity();
++              }}
++              className="px-4 py-2 rounded-2xl text-xs font-black uppercase tracking-wider border border-outline-variant/20 bg-surface-container text-on-surface/60 hover:text-primary hover:border-primary/30 transition-all flex items-center gap-2"
++            >
++              <RotateCcw size={14} className={isLoadingHistory ? "animate-spin" : ""} /> Reload
++            </button>
++          </div>
+         </div>
+ 
+         {/* Filter Tabs & Bulk Actions */}
+@@ -4513,6 +4606,26 @@ const AdsPage: FC = () => {
+                       </button>
+                     )}
+ 
++                    <button
++                      type="button"
++                      onClick={() => {
++                        void (async () => {
++                          try {
++                            const res = await api.getWhatsAppShareLink(asset.id);
++                            window.open(res.waLink, "_blank", "noopener,noreferrer");
++                            showToast("Opening WhatsApp — send it and Savvy will open your file.", "success");
++                            trackFeature("ads", "share_whatsapp_agent", { type: asset.type });
++                          } catch (e: any) {
++                            showToast(e?.response?.data?.error || "Could not build the WhatsApp link.", "error");
++                          }
++                        })();
++                      }}
++                      className="text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 flex items-center gap-1 transition-all cursor-pointer"
++                      title="Send this asset to the Savvy WhatsApp agent"
++                    >
++                      <MessageCircle size={10} /> WhatsApp agent
++                    </button>
++
+                     <button
+                       onClick={() => openSocialUpload({ type: asset.type as any, content: asset.content, prompt: asset.prompt, title: `Art ${asset.type}` })}
+                       className="text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded bg-primary/10 text-primary hover:bg-primary/20 flex items-center gap-1 transition-all cursor-pointer"
+diff --git a/src/components/creative/ContentReelPage.tsx b/src/components/creative/ContentReelPage.tsx
+index e929483817..4c512c3503 100644
+--- a/src/components/creative/ContentReelPage.tsx
++++ b/src/components/creative/ContentReelPage.tsx
+@@ -142,8 +142,12 @@ function relativeTime(value?: string) {
+ }
+ 
+ function previewImage(item: ReelItem): string | null {
+-  if (item.imageUrl) return item.imageUrl;
++  if (item.imageUrl) {
++    if (item.imageUrl.startsWith("gridfs:")) return `/public/reel/${encodeURIComponent(item.id)}/media`;
++    return item.imageUrl;
++  }
+   const preview = item.preview || "";
++  if (preview.startsWith("gridfs:")) return `/public/reel/${encodeURIComponent(item.id)}/media`;
+   if (
+     /^https?:\/\//i.test(preview) ||
+     preview.startsWith("data:image") ||
+@@ -156,6 +160,13 @@ function previewImage(item: ReelItem): string | null {
+   return null;
+ }
+ 
++function playableAudio(item: ReelItem): string | null {
++  const raw = String(item.audioUrl || "").trim();
++  if (!raw) return null;
++  if (raw.startsWith("gridfs:")) return `/public/reel/${encodeURIComponent(item.id)}/media`;
++  return raw;
++}
++
+ function typeIcon(type: string) {
+   if (type === "voice" || type === "audio") return <Radio size={24} />;
+   if (type === "video") return <Clapperboard size={24} />;
+@@ -1459,7 +1470,11 @@ const ContentReelPage: FC<ContentReelPageProps> = ({ setCurrentPage, onNavigate
+               ? partnerWhatsApp(selling.phone, selling.itemName || item.prompt, selling.businessName || "")
+               : null;
+             const mediaUrl = downloadableMedia(item);
+-            const videoSrc = playableVideoUrl(item.videoUrl);
++            const gridfsFallback = `/public/reel/${encodeURIComponent(item.id)}/media`;
++            const gridfsVideo = String(item.videoUrl || "").startsWith("gridfs:") || String(item.preview || "").startsWith("gridfs:");
++            const gridfsAudio = String(item.audioUrl || "").startsWith("gridfs:");
++            const videoSrc = playableVideoUrl(item.videoUrl) || (gridfsVideo ? gridfsFallback : null);
++            const audioSrc = playableAudio(item) || (gridfsAudio ? gridfsFallback : null);
+             const isLiked = votes[item.id] === "up";
+             const isDisliked = votes[item.id] === "down";
+             const authorName = item.author || (selling?.businessName || "Cravour Creator");
+@@ -1657,7 +1672,7 @@ const ContentReelPage: FC<ContentReelPageProps> = ({ setCurrentPage, onNavigate
+                         onError={() => setFailedImages((prev) => ({ ...prev, [item.id]: true }))}
+                       />
+                     </div>
+-                  ) : item.audioUrl ? (
++                  ) : audioSrc ? (
+                     /* Audio Jingle Vinyl Player View */
+                     <div className="w-full py-16 px-6 flex flex-col items-center justify-center gap-6 bg-linear-to-b from-slate-900 to-slate-950 text-center">
+                       <div className="relative">
+@@ -1682,7 +1697,7 @@ const ContentReelPage: FC<ContentReelPageProps> = ({ setCurrentPage, onNavigate
+                       </div>
+                       <button
+                         type="button"
+-                        onClick={() => handlePlayAudio(item.id, item.audioUrl!)}
++                        onClick={() => handlePlayAudio(item.id, audioSrc!)}
+                         className="inline-flex items-center gap-2 min-h-11 px-6 py-3 rounded-full bg-primary text-on-primary font-black text-sm shadow-xl sm:hover:scale-105 transition-colors"
+                       >
+                         {playingId === item.id ? <Pause size={18} /> : <Play size={18} />}
+@@ -1928,13 +1943,14 @@ const ContentReelPage: FC<ContentReelPageProps> = ({ setCurrentPage, onNavigate
+                       ) : null}
+ 
+                       {/* Download */}
+-                      {mediaUrl ? (
++                      {(mediaUrl || gridfsVideo || gridfsAudio) ? (
+                         <button
+                           type="button"
+                           className="inline-flex items-center gap-1.5 min-h-11 px-3.5 rounded-full text-xs font-bold border border-outline-variant/20 text-on-surface-variant hover:text-on-surface transition-colors"
+                           onClick={() => {
+-                            const kind = item.videoUrl && mediaUrl === item.videoUrl ? "video" : "image";
+-                            void downloadMedia(mediaUrl, downloadFilename(selling?.itemName || item.prompt || "reel", kind)).then((outcome) => {
++                            const href = mediaUrl || gridfsFallback;
++                            const kind = item.videoUrl ? "video" : "image";
++                            void downloadMedia(href, downloadFilename(selling?.itemName || item.prompt || "reel", kind)).then((outcome) => {
+                               showToast(outcome === "saved" ? "Download started." : "Opened file for saving.", "success");
+                             });
+                           }}
+diff --git a/src/components/creative/partnerReel.ts b/src/components/creative/partnerReel.ts
+index 32889c294f..9675c35c46 100644
+--- a/src/components/creative/partnerReel.ts
++++ b/src/components/creative/partnerReel.ts
+@@ -170,7 +170,44 @@ export function usableImage(...values: Array<string | null | undefined>): string
+ 
+ export function usableVideo(value: unknown): string | null {
+   const raw = String(value || "").trim();
+-  if (/^https?:\/\//i.test(raw) || raw.startsWith("data:video/")) return raw;
++  if (/^https?:\/\//i.test(raw) || raw.startsWith("data:video/") || raw.startsWith("blob:") || raw.startsWith("/api/") || raw.startsWith("gridfs:")) return raw;
++  return null;
++}
++
++/** Resolve a gridfs: ref to the public streaming endpoint when the reel id is known. */
++export function gridfsMediaUrl(ref: string, reelId?: string): string | null {
++  if (!String(ref || "").startsWith("gridfs:")) return null;
++  if (reelId) return `/public/reel/${encodeURIComponent(reelId)}/media`;
++  return null;
++}
++
++/** Any playable audio source: http(s), data:audio, blob, /api, or gridfs (via media endpoint). */
++export function playableAudioUrl(value: unknown, reelId?: string): string | null {
++  const raw = String(value || "").trim();
++  if (!raw) return null;
++  if (/^https?:\/\//i.test(raw) || raw.startsWith("data:audio/") || raw.startsWith("blob:") || raw.startsWith("/api/")) return raw;
++  if (raw.startsWith("gridfs:")) return gridfsMediaUrl(raw, reelId);
++  return null;
++}
++
++/** Best playable media for a reel card: video first, then image, with gridfs fallback. */
++export function reelPlayableMedia(
++  item: { id?: string; imageUrl?: string | null; videoUrl?: string | null; audioUrl?: string | null; preview?: string | null },
++  kind: "video" | "image" | "audio"
++): string | null {
++  const id = item.id;
++  if (kind === "video") {
++    const direct = playableVideoUrl(item.videoUrl);
++    if (direct) return direct;
++    const preview = String(item.preview || "");
++    if (preview.startsWith("gridfs:")) return gridfsMediaUrl(preview, id);
++    return null;
++  }
++  if (kind === "audio") return playableAudioUrl(item.audioUrl, id);
++  const img = usableImage(item.imageUrl, item.preview);
++  if (img) return img;
++  const preview = String(item.preview || "");
++  if (preview.startsWith("gridfs:")) return gridfsMediaUrl(preview, id);
+   return null;
+ }
+ 
+diff --git a/src/config/savvyVoicePrompt.ts b/src/config/savvyVoicePrompt.ts
+index 3eabe3bc4b..885c0637da 100644
+--- a/src/config/savvyVoicePrompt.ts
++++ b/src/config/savvyVoicePrompt.ts
+@@ -14,9 +14,9 @@ You are Savvy, Cravour's creative and payment co-pilot for Nigerian small busine
+ 
+ # Creative Engines & Pareto 80/20 High-Impact Focus
+ - Apply the 80/20 Pareto rule: 80% of merchant revenue and buyer savings come from 20% of actions — (1) a clear WhatsApp broadcast + 1K poster in the customer's dialect, (2) comparing staple prices against the monthly budget, and (3) confirming merchant orders with milestone delivery escrow before dispatch.
+-- Posters: Grok Imagine (grok-imagine-image-2.0) first. Gemini image is the backup. ElevenLabs does not create images.
+-- Copy: Grok 4.6 first, then Gemini 3.8 Flash. Drafts only. Never invent a price.
+-- Voice and jingles: ElevenLabs. Video: Grok Imagine video, with a still from the poster when one exists.
++- Posters and images: automatic fallback chain across Meta Muse, Grok, Gemini, OpenAI, then ElevenLabs Flows. Never promise one fixed model; say the poster engine picks the best available.
++- Copy: automatic fallback chain across DeepSeek, Gemini, OpenAI, Meta Muse, and Grok. Drafts only. Never invent a price.
++- Voice and jingles: ElevenLabs (TTS + Music). Short video clips: Meta Muse, then Google Veo, then Grok, then ElevenLabs video — with a still from the poster while a clip renders.
+ - Social hooks, stories, and radio spots are copy drafts. Do not say they are already posted.
+ - Always end campaign or budget advice with a concrete 1-tap next step (e.g., open Ad Maker Studio, preview in Pidgin/Yorùbá/Igbo/Hausa, or review budget in Wallet).
+ 
+@@ -57,6 +57,9 @@ When a navigation tool is unavailable (e.g. on WhatsApp), provide the exact clea
+ - Pass the caller's phone through caller_id so WhatsApp can deliver the file. After a create tool, say the asset is saved in Ad Maker. If mediaSent is true, the file is already in the chat.
+ - findNearbySellers returns the three nearest verified sellers and their ads. Read those names back. Do not invent a shop.
+ - shareToReels posts an Ad Maker assetId to Reels. Do not put an email or a private prompt on a reel.
++- Account linking: a WhatsApp sender becomes their logged-in self by sending "link CODE" (the code comes from Ad Maker → WhatsApp, valid 15 minutes). Linked senders generate with their own plan limits and their files appear in their Ad Maker history. Never ask for a password or login on WhatsApp; the link CODE is the login.
++- Shared Ad Maker links: a pasted https://cravour.com/ads?asset=<id> link opens that exact file. "post it" shares it to Reels. Say the asset link back so the sender can open it.
++- Voice notes: inbound voice is transcribed with ElevenLabs Scribe, so answer the transcribed request normally. When the sender used a voice note, a short spoken summary follows the text reply — keep the first two sentences self-contained.
+ 
+ # Actions & Tool Mapping
+ - Image/Poster request on WhatsApp → createImage. On the web, generateImage may also open Ad Maker. Show the picture only when the tool returns it.
+@@ -91,5 +94,5 @@ export const SAVVY_TEXT_PROMPT = SAVVY_VOICE_PROMPT.replace(
+   "Use concise text replies, usually 2–5 sentences; use a short list for steps or a longer draft when requested.",
+ );
+ 
+-export const SAVVY_VOICE_SHORT_PROMPT = `You are Savvy, Cravour's lifestyle budget and payment agent for Nigerians. Help people find trusted help nearby (Cravour Partners first, then other verified businesses), make an ad with Ad Maker, post it to Reels, and keep a budget in naira. The in-app wallet is Practice Wallet test money and cannot be withdrawn. Real merchant payments use Bach delivery escrow and Flutterwave bank transfers only after user confirmation. WhatsApp is for codes, budget updates, routine reminders, and support. Use only available tools. Never invent prices, shops, ratings, or a withdrawal. Payments need a clear yes in the app.`;
++export const SAVVY_VOICE_SHORT_PROMPT = `You are Savvy, Cravour's lifestyle budget and payment agent for Nigerians. Help people find trusted help nearby (Cravour Partners first, then other verified businesses), make an ad with Ad Maker, post it to Reels, and keep a budget in naira. Posters, video, and copy use an automatic provider fallback chain — never promise one fixed model; voice and jingles are ElevenLabs. The in-app wallet is Practice Wallet test money and cannot be withdrawn. Real merchant payments use Bach delivery escrow and Flutterwave bank transfers only after user confirmation. WhatsApp is for codes, budget updates, routine reminders, and support; a WhatsApp sender links their account with a "link CODE" from Ad Maker. Use only available tools. Never invent prices, shops, ratings, or a withdrawal. Payments need a clear yes in the app.`;
+ 
