@@ -6,7 +6,7 @@ This repository contains only that contribution: a unified diff. It does not con
 
 The patch was scanned before publish. It has no API keys, database URIs, private keys, or account tokens. Provider keys stay on the server.
 
-Shipped on cravour.com as [pull request 565](https://github.com/Cravour-Technologies-Limited/skyblue/pull/565).
+This version is what cravour.com is deploying.
 
 ## What was built
 
